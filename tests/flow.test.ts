@@ -7,6 +7,7 @@ import { inventoryTool } from '@/lib/tools/inventory'
 import { telemetryTool } from '@/lib/tools/telemetry'
 import { smartTriageTool } from '@/lib/tools/smart-triage'
 import { createMemoryStore } from '@/lib/store/memory'
+import { resetAdminTokenCacheForTests } from '@/lib/shopify-admin'
 import { BASE_ENV, mockFetch, product, shopifyResponse } from './helpers'
 
 let store: ReturnType<typeof createMemoryStore>
@@ -14,6 +15,7 @@ let store: ReturnType<typeof createMemoryStore>
 beforeEach(() => {
   store = createMemoryStore()
   resetSmsLimiters()
+  resetAdminTokenCacheForTests()
 })
 
 describe('quote', () => {
@@ -23,13 +25,7 @@ describe('quote', () => {
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ quote_available: true, tier: 'Tier 2', repair_price: 138, mobile_trip_fee: 25, total: 163, tax_included: false })
     const t = await store.get(r.body.ticket_id as string)
-    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_2', quote: { total: 163, partCostSource: 'variant_price' } })
-  })
-
-  it('prefers the dcp.part_cost metafield when Shopify exposes it', async () => {
-    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([product('iPhone 13 Battery', '89.00', { partCost: { value: '18' } })]) })
-    const r = await quoteTool({ device_model: 'iPhone 13', repair_type: 'battery' }, { env: BASE_ENV, fetchImpl, store })
-    expect(r.body).toMatchObject({ tier: 'Tier 1', repair_price: 108, total: 108, mobile_trip_fee: 0 }) // 32.4 + 75 = 107.4 -> 108
+    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_2', quote: { total: 163, costSource: 'storefront_listed_price', costConfirmed: false } })
   })
 
   it('only sends a read query to Shopify (no mutations)', async () => {

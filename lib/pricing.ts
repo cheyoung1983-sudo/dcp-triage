@@ -15,7 +15,6 @@ export const LABOR_FEE = 75
 export const MOBILE_TRIP_FEE = 25
 
 export interface V4Quote {
-  partCost: number
   repairPrice: number
   tripFee: number
   total: number
@@ -45,7 +44,6 @@ export function calculateV4Quote(params: { tier: TierId; partCost: number; mobil
   const lines = [{ label: 'Repair (parts and labor)', amount: repairPrice }]
   if (tripFee) lines.push({ label: 'Mobile trip fee', amount: tripFee })
   return {
-    partCost: Math.round(params.partCost * 100) / 100,
     repairPrice,
     tripFee,
     total: repairPrice + tripFee,

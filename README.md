@@ -40,9 +40,16 @@ components/         SmartTriage (with offline fallback + local cache), GuidedTri
 
 `repair price = ceil(part cost × 1.8 + $75 labor)` in whole dollars, plus a
 separate **$25 mobile trip fee** line for mobile service. Sales tax is not
-included. Part cost comes from Shopify (the `dcp.part_cost` product metafield
-if exposed to the Storefront API, otherwise the first variant price). If
-Shopify isn't configured or has no match, the quote says *price needs
+included. The Storefront API (read-only token) finds the part product, its
+availability and its listed price. The wholesale cost, the `dcp.part_cost`
+product metafield, is read **server-side** through a separate Shopify Admin
+app with only `read_products` scope (client credentials grant, token cached
+in memory and refreshed before expiry, retried once on 401; same pattern as
+the storefront's `services/shopify-admin.ts`). If the Admin app isn't
+configured, errors, or the metafield is missing, the listed price is used and
+the quote is marked `cost_confirmed: false` / `cost_status: "cost_unconfirmed"`.
+Cost values are never returned by any endpoint, stored on tickets, or logged.
+If Storefront isn't configured or has no match, the quote says *price needs
 confirmation* and gives no number. The old `$50/hr + 80%` and rev5
 `$55/hr + 95%` formulas are gone.
 
@@ -82,7 +89,10 @@ Agent endpoints: `X-DCP-Agent-Secret` compared in constant time to
 | UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN | URL not secret / token secret | yes (one pair) | ticket store |
 | KV_REST_API_URL / KV_REST_API_TOKEN | same | alternative pair | set by Vercel's Upstash integration |
 | SHOPIFY_STORE_DOMAIN | public | for prices | e.g. `store.myshopify.com` |
-| SHOPIFY_STOREFRONT_READONLY_TOKEN | secret | for prices | separate read-only Storefront token |
+| SHOPIFY_STOREFRONT_READONLY_TOKEN | secret (treated as public-grade) | for prices | read-only Storefront token: search, availability, listed price |
+| SHOPIFY_CLIENT_ID | secret | for confirmed cost | Admin app (read_products only), client credentials grant |
+| SHOPIFY_CLIENT_SECRET | secret | for confirmed cost | same Admin app; store only on dcp-triage |
+| SHOPIFY_ADMIN_API_VERSION | public | optional | default `2026-01` |
 | TWILIO_ACCOUNT_SID | secret | for SMS | |
 | TWILIO_AUTH_TOKEN | secret | for SMS | |
 | TWILIO_FROM_NUMBER | public | for SMS | E.164 |

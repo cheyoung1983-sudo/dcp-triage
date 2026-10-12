@@ -86,7 +86,7 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
     source,
     deviceModel: device_model,
     summary: repair_type,
-    quote: { total: quote.total, repairPrice: quote.repairPrice, tripFee: quote.tripFee, partCostSource: part.source },
+    quote: { total: quote.total, repairPrice: quote.repairPrice, tripFee: quote.tripFee, costSource: part.costSource, costConfirmed: part.costConfirmed },
     events: [{ at: now, type: 'quote', detail: { repairType: repair_type, total: quote.total, product: part.handle } }],
   }
   await store.create(ticket)
@@ -107,10 +107,13 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
       lines: quote.lines,
       tax_included: false,
       part_available: part.availableForSale,
+      cost_confirmed: part.costConfirmed,
+      ...(part.costConfirmed ? {} : { cost_status: 'cost_unconfirmed' }),
       message:
         `Estimate for ${device_model}: $${quote.repairPrice} for the repair` +
         (quote.tripFee ? ` plus a $${quote.tripFee} mobile trip fee, $${quote.total} total` : '') +
-        ', before sales tax. Final price is confirmed by the technician after inspection.',
+        ', before sales tax. Final price is confirmed by the technician after inspection.' +
+        (part.costConfirmed ? '' : ' This estimate is based on our listed part price and is not yet confirmed; say it is an estimate that a technician will confirm.'),
     },
   }
 }
