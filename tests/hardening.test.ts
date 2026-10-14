@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSharedLimiter } from '@/lib/shared-limit'
-import { getClientIp } from '@/lib/auth'
+import { getClientIp, rateLimitIpKey } from '@/lib/auth'
 import { readJson } from '@/lib/http'
 import { pageCsp, API_CSP } from '@/lib/csp'
 import { smartTriageTool } from '@/lib/tools/smart-triage'
@@ -69,6 +69,13 @@ describe('shared rate limiter', () => {
     expect(d).toMatchObject({ allowed: false, source: 'closed' })
     expect(d.retryAfterSeconds).toBeGreaterThan(0)
     expect(err).toHaveBeenCalledWith(expect.stringContaining('fail-closed'))
+  })
+
+  it('groups rotating IPv6 addresses by /64 (regression: preview saw a new key per request)', () => {
+    expect(rateLimitIpKey('2a09:bac5:89a9:26be::3dc:3c')).toBe(rateLimitIpKey('2a09:bac5:89a9:26be::3dc:45'))
+    expect(rateLimitIpKey('2a09:bac5:89a9:26be::3dc:3c')).toBe('2a09:bac5:89a9:26be::/64')
+    expect(rateLimitIpKey('2001:db8::1')).toBe('2001:db8:0:0::/64')
+    expect(rateLimitIpKey('203.0.113.5')).toBe('203.0.113.5')
   })
 
   it('keys one client consistently even when proxy hops vary (regression)', () => {

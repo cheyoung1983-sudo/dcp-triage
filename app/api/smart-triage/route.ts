@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getClientIp } from '@/lib/auth'
+import { getClientIp, rateLimitIpKey } from '@/lib/auth'
 import { methodNotAllowed, readJson, toResponse } from '@/lib/http'
 import { hashKey } from '@/lib/rate-limit'
 import { createSharedLimiter } from '@/lib/shared-limit'
@@ -13,7 +13,7 @@ export const limiter = createSharedLimiter({ name: 'smart-triage', limit: 30, wi
 
 export async function POST(req: Request) {
   const ip = getClientIp(req.headers)
-  const key = hashKey(ip)
+  const key = hashKey(rateLimitIpKey(ip))
   const check = await limiter.consume(key)
   const rlHeaders: Record<string, string> = {
     'X-RateLimit-Limit': '30',

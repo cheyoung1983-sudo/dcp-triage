@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import { BUSINESS_PHONE_DISPLAY, SERVICES_FAQ_URL } from '../config'
+import { rateLimitIpKey } from '../auth'
 import { normalizeUsPhone } from '../phone'
 import { hashKey } from '../rate-limit'
 import { createSharedLimiter } from '../shared-limit'
@@ -45,7 +46,7 @@ export function buildSmsBody(params: { tierLabel: string; total: number; tripFee
 
 export async function dispatchTool(input: unknown, ctx: ToolContext = {}): Promise<ToolResult> {
   const env = ctx.env ?? process.env
-  const ipCheck = await ipLimiter.consume(hashKey(`ip:${ctx.clientIp ?? 'unknown'}`))
+  const ipCheck = await ipLimiter.consume(hashKey(`ip:${rateLimitIpKey(ctx.clientIp ?? 'unknown')}`))
   if (!ipCheck.allowed) {
     return {
       status: 429,
