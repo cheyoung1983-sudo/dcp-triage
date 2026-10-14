@@ -33,7 +33,7 @@ interface Options {
   now?: () => number
 }
 
-let missingEnvLogged = new Set<string>()
+const missingEnvLogged = new Set<string>()
 
 async function redisConsume(
   config: UpstashConfig,
