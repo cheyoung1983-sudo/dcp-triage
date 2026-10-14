@@ -7,7 +7,7 @@
  * -> short-lived Admin token, cached in memory and refreshed before expiry,
  * dropped and retried once on a 401. The app should have ONLY read_products.
  *
- * This module only sends a `products` query. There are no mutations.
+ * Only read queries are sent (mutations are rejected before any request).
  * Cost values it returns must never be sent to a client, put in a public
  * response, or logged.
  */
@@ -95,58 +95,44 @@ export async function getAdminToken(
   return request
 }
 
-const COST_QUERY = `query DcpPartCost($query: String!) {
-  products(first: 1, query: $query) {
-    nodes { handle metafield(namespace: "dcp", key: "part_cost") { value } }
-  }
-}`
+export type AdminGraphqlResult<T> = { status: 'ok'; data: T } | { status: 'not_configured' } | { status: 'error' }
 
-export type AdminCostResult =
-  | { status: 'ok'; partCost: number }
-  | { status: 'missing' }
-  | { status: 'not_configured' }
-  | { status: 'error' }
-
-/** Looks up the dcp.part_cost metafield for one product handle. Never throws. */
-export async function getPartCostByHandle(
-  handle: string,
+/**
+ * Runs one read-only Admin GraphQL query. Never throws; logs only the HTTP
+ * status or error class, never variables, values or tokens.
+ */
+export async function adminQuery<T>(
+  query: string,
+  variables: Record<string, unknown>,
   ctx: { env?: Env; fetchImpl?: typeof fetch; now?: () => number } = {}
-): Promise<AdminCostResult> {
+): Promise<AdminGraphqlResult<T>> {
+  if (/^\s*mutation\b/i.test(query)) throw new Error('Admin mutations are not allowed in dcp-triage')
   const config = getAdminConfig(ctx.env)
   if (!config) return { status: 'not_configured' }
-  if (!/^[a-z0-9-]{1,255}$/i.test(handle)) return { status: 'missing' }
   const fetchImpl = ctx.fetchImpl ?? fetch
   const url = `https://${config.domain}/admin/api/${config.apiVersion}/graphql.json`
   const post = (token: string) =>
     fetchImpl(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Shopify-Access-Token': token },
-      body: JSON.stringify({ query: COST_QUERY, variables: { query: `handle:${handle}` } }),
+      body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(8_000),
     })
   try {
     let res = await post(await getAdminToken(config, ctx))
-    if (res.status === 401) {
-      res = await post(await getAdminToken(config, { ...ctx, forceRefresh: true }))
-    }
+    if (res.status === 401) res = await post(await getAdminToken(config, { ...ctx, forceRefresh: true }))
     if (!res.ok) {
-      console.warn(`[dcp-triage] Shopify Admin cost lookup failed (HTTP ${res.status}); using listed price`)
+      console.warn(`[dcp-triage] Shopify Admin query failed (HTTP ${res.status})`)
       return { status: 'error' }
     }
-    const json = (await res.json()) as {
-      data?: { products?: { nodes?: { handle: string; metafield: { value: string } | null }[] } }
-      errors?: unknown
-    }
-    if (json.errors) {
-      console.warn('[dcp-triage] Shopify Admin cost lookup returned GraphQL errors; using listed price')
+    const json = (await res.json()) as { data?: T; errors?: unknown }
+    if (json.errors || !json.data) {
+      console.warn('[dcp-triage] Shopify Admin query returned GraphQL errors')
       return { status: 'error' }
     }
-    const node = json.data?.products?.nodes?.find((n) => n.handle === handle)
-    const value = node?.metafield?.value
-    const cost = value != null ? Number(value) : NaN
-    return Number.isFinite(cost) && cost >= 0 ? { status: 'ok', partCost: cost } : { status: 'missing' }
+    return { status: 'ok', data: json.data }
   } catch (err) {
-    console.warn(`[dcp-triage] Shopify Admin cost lookup error (${err instanceof AdminError ? err.message : 'network error'}); using listed price`)
+    console.warn(`[dcp-triage] Shopify Admin query error (${err instanceof AdminError ? err.message : 'network error'})`)
     return { status: 'error' }
   }
 }

@@ -20,7 +20,8 @@ app/
 lib/
   tiers.ts          the ONE tier system + symptom classifier
   pricing.ts        the ONE pricing engine (V4)
-  shopify.ts        read-only Storefront API part-price lookup
+  shopify.ts        read-only Admin API part search, availability, listed price + cost
+  shopify-admin.ts  client-credentials token cache + read-only Admin GraphQL
   store/            ticket store: Upstash Redis (prod/preview), in-memory (dev/test only)
   auth.ts           constant-time X-DCP-Agent-Secret check, fail closed
   tools/*           one module per tool (pure functions with injectable fetch/store/env)
@@ -40,17 +41,20 @@ components/         SmartTriage (with offline fallback + local cache), GuidedTri
 
 `repair price = ceil(part cost × 1.8 + $75 labor)` in whole dollars, plus a
 separate **$25 mobile trip fee** line for mobile service. Sales tax is not
-included. The Storefront API (read-only token) finds the part product, its
-availability and its listed price. The wholesale cost, the `dcp.part_cost`
-product metafield, is read **server-side** through a separate Shopify Admin
-app with only `read_products` scope (client credentials grant, token cached
-in memory and refreshed before expiry, retried once on 401; same pattern as
-the storefront's `services/shopify-admin.ts`). If the Admin app isn't
-configured, errors, or the metafield is missing, the listed price is used and
-the quote is marked `cost_confirmed: false` / `cost_status: "cost_unconfirmed"`.
-Cost values are never returned by any endpoint, stored on tickets, or logged.
-If Storefront isn't configured or has no match, the quote says *price needs
-confirmation* and gives no number. The old `$50/hr + 80%` and rev5
+included. Everything comes from one read-only Shopify **Admin API** query
+(server-side only; no Storefront token): product search (`status:active`),
+availability (ACTIVE + published to the Online Store + first variant
+`availableForSale` or inventory policy CONTINUE; quantities are never
+requested), the listed price, and the wholesale cost in the `dcp.part_cost`
+product metafield. Auth is a separate Admin app with only `read_products`,
+via the client credentials grant (token cached in memory, refreshed before
+expiry, retried once on 401; same pattern as the storefront's
+`services/shopify-admin.ts`). If the metafield is missing, the listed price
+is used and the quote is marked `cost_confirmed: false` /
+`cost_status: "cost_unconfirmed"`. Cost values are never returned by any
+endpoint, stored on tickets, or logged. If the Admin app isn't configured,
+fails, or nothing matches, the quote says *price needs confirmation* and
+gives no number. The old `$50/hr + 80%` and rev5
 `$55/hr + 95%` formulas are gone.
 
 ### Flow
@@ -88,10 +92,9 @@ Agent endpoints: `X-DCP-Agent-Secret` compared in constant time to
 | ELEVENLABS_WEBHOOK_SECRET | secret | yes | agent auth; unset → 503 |
 | UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN | URL not secret / token secret | yes (one pair) | ticket store |
 | KV_REST_API_URL / KV_REST_API_TOKEN | same | alternative pair | set by Vercel's Upstash integration |
-| SHOPIFY_STORE_DOMAIN | public | for prices | e.g. `store.myshopify.com` |
-| SHOPIFY_STOREFRONT_READONLY_TOKEN | secret (treated as public-grade) | for prices | read-only Storefront token: search, availability, listed price |
-| SHOPIFY_CLIENT_ID | secret | for confirmed cost | Admin app (read_products only), client credentials grant |
-| SHOPIFY_CLIENT_SECRET | secret | for confirmed cost | same Admin app; store only on dcp-triage |
+| SHOPIFY_STORE_DOMAIN | public | for prices | the store's permanent `*.myshopify.com` domain (`7r1d6z-cc.myshopify.com`), not an alias |
+| SHOPIFY_CLIENT_ID | secret | for prices | Admin app (read_products only), client credentials grant |
+| SHOPIFY_CLIENT_SECRET | secret | for prices | same Admin app; store only on dcp-triage |
 | SHOPIFY_ADMIN_API_VERSION | public | optional | default `2026-01` |
 | TWILIO_ACCOUNT_SID | secret | for SMS | |
 | TWILIO_AUTH_TOKEN | secret | for SMS | |

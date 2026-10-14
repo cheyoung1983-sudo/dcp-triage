@@ -1,23 +1,20 @@
 /**
- * READ-ONLY Shopify lookups for parts.
+ * READ-ONLY Shopify part lookups, entirely through the Admin API
+ * (./shopify-admin: client credentials, read_products only). No Storefront
+ * token is used.
  *
- * Storefront API (SHOPIFY_STOREFRONT_READONLY_TOKEN, treated as public-grade):
- * product search, availability and LISTED price only. Wholesale cost is
- * never requested through it.
+ * One query returns, per product: title, handle, status, Online Store
+ * publication, first variant listed price + availableForSale +
+ * inventoryPolicy, and the `dcp.part_cost` metafield (wholesale cost).
  *
- * Wholesale cost (`dcp.part_cost` metafield) comes server-side from the
- * Admin API in ./shopify-admin. If the Admin app isn't configured, errors,
- * or the metafield is missing, the listed price is used and the quote is
- * marked cost unconfirmed.
+ * `partCost` is server-only: it must never be returned by an endpoint,
+ * stored on a ticket, or logged. Inventory quantities are never requested.
+ * If the Admin app isn't configured or errors, callers get null and quotes
+ * say the price needs confirmation.
  */
-import { getPartCostByHandle } from './shopify-admin'
+import { adminQuery } from './shopify-admin'
 
-export const STOREFRONT_API_VERSION = '2025-07'
-
-export interface ShopifyConfig {
-  domain: string
-  token: string
-}
+type Ctx = { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch; now?: () => number }
 
 export interface PartListing {
   productTitle: string
@@ -27,7 +24,7 @@ export interface PartListing {
   availableForSale: boolean
 }
 
-export type CostSource = 'admin_metafield' | 'storefront_listed_price'
+export type CostSource = 'admin_metafield' | 'listed_price'
 
 /** Server-only. `partCost` must never leave the server. */
 export interface PartCost {
@@ -39,21 +36,20 @@ export interface PartCost {
   costConfirmed: boolean
 }
 
-export function getShopifyConfig(env: Record<string, string | undefined> = process.env): ShopifyConfig | null {
-  const domain = (env.SHOPIFY_STORE_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
-  const token = (env.SHOPIFY_STOREFRONT_READONLY_TOKEN || '').trim()
-  if (!domain || !token) return null
-  if (!/^[a-z0-9.-]+$/i.test(domain)) return null
-  return { domain, token }
+interface InternalListing extends PartListing {
+  metafieldCost: number | null
 }
 
-const PRODUCTS_QUERY = `query DcpPartLookup($query: String!) {
+export const PARTS_QUERY = `query DcpParts($query: String!) {
+  shop { currencyCode }
   products(first: 5, query: $query) {
     nodes {
       title
       handle
-      availableForSale
-      variants(first: 1) { nodes { price { amount currencyCode } availableForSale } }
+      status
+      publishedAt
+      partCost: metafield(namespace: "dcp", key: "part_cost") { value }
+      variants(first: 1) { nodes { price availableForSale inventoryPolicy } }
     }
   }
 }`
@@ -61,53 +57,51 @@ const PRODUCTS_QUERY = `query DcpPartLookup($query: String!) {
 interface ProductNode {
   title: string
   handle: string
-  availableForSale: boolean
-  variants: { nodes: { price: { amount: string; currencyCode: string }; availableForSale: boolean }[] }
+  status: string
+  publishedAt: string | null
+  partCost: { value: string } | null
+  variants: { nodes: { price: string; availableForSale: boolean; inventoryPolicy: 'DENY' | 'CONTINUE' }[] }
 }
 
-/** Escapes a free-text term for Shopify's search syntax. */
+/** Escapes free-text terms for Shopify's search syntax; only ACTIVE products. */
 export function buildSearchQuery(deviceModel: string, partKeyword: string): string {
   const clean = (s: string) => s.replace(/["\\:()]/g, ' ').replace(/\s+/g, ' ').trim()
-  return [clean(deviceModel), clean(partKeyword)].filter(Boolean).map((t) => `"${t}"`).join(' AND ')
+  const terms = [clean(deviceModel), clean(partKeyword)].filter(Boolean).map((t) => `"${t}"`)
+  return [...terms, 'status:active'].join(' AND ')
 }
 
-export async function searchPartProducts(
-  deviceModel: string,
-  partKeyword: string,
-  ctx: { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch } = {}
-): Promise<PartListing[] | null> {
-  const config = getShopifyConfig(ctx.env)
-  if (!config) return null
-  try {
-    const res = await (ctx.fetchImpl ?? fetch)(`https://${config.domain}/api/${STOREFRONT_API_VERSION}/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Storefront-Access-Token': config.token,
-      },
-      body: JSON.stringify({ query: PRODUCTS_QUERY, variables: { query: buildSearchQuery(deviceModel, partKeyword) } }),
-      signal: AbortSignal.timeout(8_000),
+async function searchInternal(deviceModel: string, partKeyword: string, ctx: Ctx): Promise<InternalListing[] | null> {
+  const res = await adminQuery<{ shop: { currencyCode: string }; products: { nodes: ProductNode[] } }>(
+    PARTS_QUERY,
+    { query: buildSearchQuery(deviceModel, partKeyword) },
+    ctx
+  )
+  if (res.status !== 'ok') return null
+  const currency = res.data.shop?.currencyCode || 'USD'
+  const out: InternalListing[] = []
+  for (const node of res.data.products?.nodes ?? []) {
+    const variant = node.variants?.nodes?.[0]
+    const price = variant ? Number(variant.price) : NaN
+    if (!variant || !Number.isFinite(price) || price < 0) continue
+    const published = Boolean(node.publishedAt) // published to the Online Store
+    const sellable = variant.availableForSale || variant.inventoryPolicy === 'CONTINUE'
+    const meta = node.partCost?.value != null ? Number(node.partCost.value) : NaN
+    out.push({
+      productTitle: node.title,
+      handle: node.handle,
+      listedPrice: price,
+      currency,
+      availableForSale: node.status === 'ACTIVE' && published && sellable,
+      metafieldCost: Number.isFinite(meta) && meta >= 0 ? meta : null,
     })
-    if (!res.ok) return null
-    const json = (await res.json()) as { data?: { products?: { nodes?: ProductNode[] } } }
-    const nodes = json.data?.products?.nodes ?? []
-    const out: PartListing[] = []
-    for (const node of nodes) {
-      const variant = node.variants?.nodes?.[0]
-      const amount = variant ? Number(variant.price.amount) : NaN
-      if (!variant || !Number.isFinite(amount) || amount < 0) continue
-      out.push({
-        productTitle: node.title,
-        handle: node.handle,
-        listedPrice: amount,
-        currency: variant.price.currencyCode,
-        availableForSale: node.availableForSale && variant.availableForSale,
-      })
-    }
-    return out
-  } catch {
-    return null
   }
+  return out
+}
+
+/** Public-safe listing search (no cost fields). null = Shopify not configured or failed. */
+export async function searchPartProducts(deviceModel: string, partKeyword: string, ctx: Ctx = {}): Promise<PartListing[] | null> {
+  const results = await searchInternal(deviceModel, partKeyword, ctx)
+  return results?.map(({ productTitle, handle, listedPrice, currency, availableForSale }) => ({ productTitle, handle, listedPrice, currency, availableForSale })) ?? null
 }
 
 export const PART_KEYWORDS: Record<string, string> = {
@@ -119,40 +113,25 @@ export const PART_KEYWORDS: Record<string, string> = {
   back_glass: 'back glass',
 }
 
-/** Picks the best matching listing for a quotable repair, or null. */
-export async function findPartListing(
-  deviceModel: string,
-  repairType: string,
-  ctx: { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch } = {}
-): Promise<PartListing | null> {
-  const keyword = PART_KEYWORDS[repairType]
-  if (!keyword) return null
-  const results = await searchPartProducts(deviceModel, keyword, ctx)
-  if (!results?.length) return null
-  if (repairType === 'screen_oem') {
-    const oem = results.find((r) => /\b(oem|genuine|original|service pack)\b/i.test(r.productTitle))
-    if (oem) return oem
-  }
-  if (repairType === 'screen_aftermarket') {
-    const am = results.find((r) => !/\b(oem|genuine|original|service pack)\b/i.test(r.productTitle))
-    if (am) return am
-  }
+const OEM_RE = /\b(oem|genuine|original|service pack)\b/i
+
+function pick<T extends PartListing>(results: T[], repairType: string): T {
+  if (repairType === 'screen_oem') return results.find((r) => OEM_RE.test(r.productTitle)) ?? results[0]
+  if (repairType === 'screen_aftermarket') return results.find((r) => !OEM_RE.test(r.productTitle)) ?? results[0]
   return results[0]
 }
 
 /**
- * Server-only: part cost for a quote. Admin metafield when available
- * (confirmed), otherwise the Storefront listed price (unconfirmed).
+ * Server-only: part cost for a quote. `dcp.part_cost` metafield when present
+ * (confirmed), otherwise the listed price (unconfirmed). null = no price.
  */
-export async function lookupPartCost(
-  deviceModel: string,
-  repairType: string,
-  ctx: { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch; now?: () => number } = {}
-): Promise<PartCost | null> {
-  const listing = await findPartListing(deviceModel, repairType, ctx)
-  if (!listing) return null
-  const admin = await getPartCostByHandle(listing.handle, ctx)
-  const base = { handle: listing.handle, currency: listing.currency, availableForSale: listing.availableForSale }
-  if (admin.status === 'ok') return { ...base, partCost: admin.partCost, costSource: 'admin_metafield', costConfirmed: true }
-  return { ...base, partCost: listing.listedPrice, costSource: 'storefront_listed_price', costConfirmed: false }
+export async function lookupPartCost(deviceModel: string, repairType: string, ctx: Ctx = {}): Promise<PartCost | null> {
+  const keyword = PART_KEYWORDS[repairType]
+  if (!keyword) return null
+  const results = await searchInternal(deviceModel, keyword, ctx)
+  if (!results?.length) return null
+  const best = pick(results, repairType)
+  const base = { handle: best.handle, currency: best.currency, availableForSale: best.availableForSale }
+  if (best.metafieldCost !== null) return { ...base, partCost: best.metafieldCost, costSource: 'admin_metafield', costConfirmed: true }
+  return { ...base, partCost: best.listedPrice, costSource: 'listed_price', costConfirmed: false }
 }

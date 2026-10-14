@@ -25,21 +25,24 @@ describe('quote', () => {
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ quote_available: true, tier: 'Tier 2', repair_price: 138, mobile_trip_fee: 25, total: 163, tax_included: false })
     const t = await store.get(r.body.ticket_id as string)
-    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_2', quote: { total: 163, costSource: 'storefront_listed_price', costConfirmed: false } })
+    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_2', quote: { total: 163, costSource: 'listed_price', costConfirmed: false } })
   })
 
   it('only sends a read query to Shopify (no mutations)', async () => {
     const fetchImpl = mockFetch({ shopify: () => shopifyResponse([product('Pixel 8 Screen', '60')]) })
     await quoteTool({ device_model: 'Pixel 8', repair_type: 'screen_oem' }, { env: BASE_ENV, fetchImpl, store })
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
-    const sent = JSON.parse(String(init.body)) as { query: string }
+    const [url, init] = fetchImpl.mock.calls.find((c) => String(c[0]).includes('/admin/api/')) as unknown as [string, RequestInit]
+    expect(url).toBe('https://dcp-test.myshopify.com/admin/api/2026-01/graphql.json')
+    const sent = JSON.parse(String(init.body)) as { query: string; variables: { query: string } }
     expect(sent.query.trim().startsWith('query')).toBe(true)
-    expect(sent.query).not.toMatch(/mutation/i)
-    expect((init.headers as Record<string, string>)['X-Shopify-Storefront-Access-Token']).toBe('sf-readonly')
+    expect(sent.query).not.toMatch(/mutation|inventoryQuantity|quantities/i)
+    expect(sent.variables.query).toBe('"Pixel 8" AND "screen" AND status:active')
+    expect((init.headers as Record<string, string>)['X-Shopify-Access-Token']).toBe('admin-token')
+    expect(fetchImpl.mock.calls.some((c) => /\/api\/\d{4}-\d{2}\/graphql/.test(String(c[0])) && !String(c[0]).includes('/admin/'))).toBe(false)
   })
 
-  it('says the price needs confirmation when the Shopify token is unset', async () => {
-    const env = { ...BASE_ENV, SHOPIFY_STOREFRONT_READONLY_TOKEN: '' }
+  it('says the price needs confirmation when the Shopify Admin app is unset', async () => {
+    const env = { ...BASE_ENV, SHOPIFY_CLIENT_SECRET: '' }
     const r = await quoteTool({ device_model: 'iPhone 13', repair_type: 'battery' }, { env, fetchImpl: mockFetch({}), store })
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ quote_available: false, price_needs_confirmation: true })
@@ -114,7 +117,7 @@ describe('dispatch SMS (mocked Twilio)', () => {
     const r = await dispatchTool({ ticket_id: esc.body.ticket_id, customer_name: 'Sam', customer_phone: '5095550199' }, { env: BASE_ENV, fetchImpl: mockFetch({}), store })
     expect(r.status).toBe(409)
 
-    const unpriced = await quoteTool({ device_model: 'iPhone 13', repair_type: 'battery' }, { env: { ...BASE_ENV, SHOPIFY_STOREFRONT_READONLY_TOKEN: '' }, store })
+    const unpriced = await quoteTool({ device_model: 'iPhone 13', repair_type: 'battery' }, { env: { ...BASE_ENV, SHOPIFY_CLIENT_SECRET: '' }, store })
     const r2 = await dispatchTool({ ticket_id: unpriced.body.ticket_id, customer_name: 'Sam', customer_phone: '5095550199' }, { env: BASE_ENV, fetchImpl: mockFetch({}), store })
     expect(r2.status).toBe(409)
   })
@@ -220,7 +223,7 @@ describe('other tools', () => {
     const r = await inventoryTool({ device_model: 'iPhone 13', part: 'battery' }, { env: BASE_ENV, fetchImpl: mockFetch({ shopify: () => shopifyResponse([product('iPhone 13 Battery', '18')]) }) })
     expect(r.body).toMatchObject({ inventory_known: true, any_available: true })
     expect(JSON.stringify(r.body)).not.toMatch(/quantity|bin/i)
-    const off = await inventoryTool({ device_model: 'iPhone 13', part: 'battery' }, { env: { ...BASE_ENV, SHOPIFY_STOREFRONT_READONLY_TOKEN: '' } })
+    const off = await inventoryTool({ device_model: 'iPhone 13', part: 'battery' }, { env: { ...BASE_ENV, SHOPIFY_CLIENT_SECRET: '' } })
     expect(off.body).toMatchObject({ inventory_known: false })
   })
 

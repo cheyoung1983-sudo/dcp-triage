@@ -20,7 +20,7 @@ export interface Ticket {
   /** Customer contact details. Stored only in the private ticket store, never sent to Slack or logs. */
   customer?: { name?: string; phone?: string; email?: string }
   /** Never stores the wholesale part cost itself. */
-  quote?: { total: number; repairPrice: number; tripFee: number; costSource: 'admin_metafield' | 'storefront_listed_price'; costConfirmed: boolean }
+  quote?: { total: number; repairPrice: number; tripFee: number; costSource: 'admin_metafield' | 'listed_price'; costConfirmed: boolean }
   events: TicketEvent[]
 }
 
