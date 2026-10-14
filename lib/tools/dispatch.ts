@@ -70,8 +70,8 @@ export async function dispatchTool(input: unknown, ctx: ToolContext = {}): Promi
   if (ticket.tier === 'TIER_3') {
     return { status: 409, body: { success: false, smsSent: false, error: 'Tier 3 tickets never get a price by text. Use escalate_tier3_ticket.' } }
   }
-  if (!ticket.quote) {
-    return { status: 409, body: { success: false, smsSent: false, error: 'This ticket has no confirmed price, so no estimate can be texted.' } }
+  if (!ticket.quote || ticket.quote.costConfirmed !== true) {
+    return { status: 409, body: { success: false, smsSent: false, error: 'This ticket has no confirmed price, so no price can be texted. Tell the customer a technician will confirm the price.' } }
   }
 
   const twilio = getTwilioConfig(env)

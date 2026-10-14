@@ -9,8 +9,8 @@
  *
  * `partCost` is server-only: it must never be returned by an endpoint,
  * stored on a ticket, or logged. Inventory quantities are never requested.
- * If the Admin app isn't configured or errors, callers get null and quotes
- * say the price needs confirmation.
+ * If the Admin app isn't configured or errors, or the metafield is missing,
+ * quotes say the price needs confirmation (no number).
  */
 import { adminQuery } from './shopify-admin'
 
@@ -24,17 +24,16 @@ export interface PartListing {
   availableForSale: boolean
 }
 
-export type CostSource = 'admin_metafield' | 'listed_price'
+export type CostSource = 'admin_metafield'
 
-/** Server-only. `partCost` must never leave the server. */
-export interface PartCost {
-  handle: string
-  currency: string
-  availableForSale: boolean
-  partCost: number
-  costSource: CostSource
-  costConfirmed: boolean
-}
+/**
+ * Server-only. `partCost` exists ONLY when confirmed by the dcp.part_cost
+ * metafield and must never leave the server. The listed (retail) price is
+ * never used as a cost.
+ */
+export type PartCost =
+  | { handle: string; currency: string; availableForSale: boolean; costConfirmed: true; partCost: number; costSource: CostSource }
+  | { handle: string; currency: string; availableForSale: boolean; costConfirmed: false }
 
 interface InternalListing extends PartListing {
   metafieldCost: number | null
@@ -122,8 +121,9 @@ function pick<T extends PartListing>(results: T[], repairType: string): T {
 }
 
 /**
- * Server-only: part cost for a quote. `dcp.part_cost` metafield when present
- * (confirmed), otherwise the listed price (unconfirmed). null = no price.
+ * Server-only: part cost for a quote. Only the `dcp.part_cost` metafield
+ * counts as a cost. Without it the result is costConfirmed: false with no
+ * number (availability only). null = no matching product / Shopify unavailable.
  */
 export async function lookupPartCost(deviceModel: string, repairType: string, ctx: Ctx = {}): Promise<PartCost | null> {
   const keyword = PART_KEYWORDS[repairType]
@@ -132,6 +132,6 @@ export async function lookupPartCost(deviceModel: string, repairType: string, ct
   if (!results?.length) return null
   const best = pick(results, repairType)
   const base = { handle: best.handle, currency: best.currency, availableForSale: best.availableForSale }
-  if (best.metafieldCost !== null) return { ...base, partCost: best.metafieldCost, costSource: 'admin_metafield', costConfirmed: true }
-  return { ...base, partCost: best.listedPrice, costSource: 'listed_price', costConfirmed: false }
+  if (best.metafieldCost !== null) return { ...base, costConfirmed: true, partCost: best.metafieldCost, costSource: 'admin_metafield' }
+  return { ...base, costConfirmed: false }
 }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { quoteTool } from '@/lib/tools/quote'
 import { smartTriageTool } from '@/lib/tools/smart-triage'
 import { inventoryTool } from '@/lib/tools/inventory'
+import { dispatchTool, resetSmsLimiters } from '@/lib/tools/dispatch'
 import { createMemoryStore } from '@/lib/store/memory'
 import { adminQuery, getAdminToken, getAdminConfig, resetAdminTokenCacheForTests } from '@/lib/shopify-admin'
 import { ADMIN_ENV, NO_SHOPIFY_ENV, mockFetch, product, shopifyResponse } from './helpers'
@@ -14,6 +15,7 @@ let store: ReturnType<typeof createMemoryStore>
 beforeEach(() => {
   store = createMemoryStore()
   resetAdminTokenCacheForTests()
+  resetSmsLimiters()
 })
 
 const urls = (f: ReturnType<typeof mockFetch>) => f.mock.calls.map((c) => String(c[0]))
@@ -37,11 +39,40 @@ describe('Admin API: one query for listing + cost', () => {
     ['metafield missing', null],
     ['metafield not a number', 'abc'],
     ['metafield negative', '-5'],
-  ])('%s: listed price, marked cost unconfirmed', async (_n, value) => {
+  ])('%s: no number from the listed price; price needs confirmation, ticket recorded, availability kept', async (_n, value) => {
     const r = await quoteTool(input, { env: ADMIN_ENV, fetchImpl: mockFetch({ admin: withCost(value) }), store })
-    expect(r.body).toMatchObject({ quote_available: true, repair_price: 236, cost_confirmed: false, cost_status: 'cost_unconfirmed' }) // 89*1.8+75 = 235.2 -> 236
-    expect(String(r.body.message)).toMatch(/not yet confirmed/)
-    expect((await store.get(String(r.body.ticket_id)))?.quote).toMatchObject({ costSource: 'listed_price', costConfirmed: false })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({
+      quote_available: false,
+      price_needs_confirmation: true,
+      cost_confirmed: false,
+      cost_status: 'cost_unconfirmed',
+      part_found: true,
+      part_available: true,
+    })
+    for (const k of ['total', 'repair_price', 'mobile_trip_fee', 'lines']) expect(r.body).not.toHaveProperty(k)
+    expect(String(r.body.message)).toMatch(/technician will confirm the price/)
+    expect(JSON.stringify(r.body)).not.toMatch(/\$\d/)
+    const t = await store.get(String(r.body.ticket_id))
+    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_1' })
+    expect(t?.quote).toBeUndefined()
+  })
+
+  it('Flow preview case: iPhone 13 OLED listed $165.18 without metafield yields no number (was $373 + $25)', async () => {
+    const fetchImpl = mockFetch({ admin: () => shopifyResponse([product('iPhone 13 OLED Screen', '165.18')]) })
+    const r = await quoteTool({ device_model: 'iPhone 13', repair_type: 'screen_aftermarket', mobile_service: true }, { env: ADMIN_ENV, fetchImpl, store })
+    expect(r.body).toMatchObject({ quote_available: false, price_needs_confirmation: true, cost_status: 'cost_unconfirmed', part_available: true })
+    expect(r.body).not.toHaveProperty('mobile_trip_fee')
+    const text = JSON.stringify(r.body)
+    for (const n of ['373', '398', '165.18']) expect(text).not.toContain(n)
+    expect(text).not.toMatch(/\$\d/)
+
+    // dispatch-sms must not text any price for it
+    const sms = mockFetch({})
+    const d = await dispatchTool({ ticket_id: r.body.ticket_id, customer_name: 'Pat', customer_phone: '5095550123' }, { env: ADMIN_ENV, fetchImpl: sms, store })
+    expect(d.status).toBe(409)
+    expect(d.body).toMatchObject({ smsSent: false })
+    expect(sms).not.toHaveBeenCalled()
   })
 
   it.each([

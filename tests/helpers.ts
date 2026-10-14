@@ -52,3 +52,8 @@ export function mockFetch(handlers: {
     throw new Error(`unexpected fetch ${u}`)
   })
 }
+
+/** Product whose dcp.part_cost metafield is `cost`; listed retail price is deliberately different. */
+export function costed(title: string, cost: string) {
+  return product(title, '999.99', { partCost: { value: cost } })
+}

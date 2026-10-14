@@ -49,19 +49,23 @@ requested), the listed price, and the wholesale cost in the `dcp.part_cost`
 product metafield. Auth is a separate Admin app with only `read_products`,
 via the client credentials grant (token cached in memory, refreshed before
 expiry, retried once on 401; same pattern as the storefront's
-`services/shopify-admin.ts`). If the metafield is missing, the listed price
-is used and the quote is marked `cost_confirmed: false` /
-`cost_status: "cost_unconfirmed"`. Cost values are never returned by any
-endpoint, stored on tickets, or logged. If the Admin app isn't configured,
-fails, or nothing matches, the quote says *price needs confirmation* and
-gives no number. The old `$50/hr + 80%` and rev5
+`services/shopify-admin.ts`). **Only a metafield-confirmed cost produces a
+number.** The listed price is retail, not cost, so it is never fed into the
+formula. If the metafield is missing or invalid, the Admin app isn't
+configured, it errors, or nothing matches, the quote returns
+`price_needs_confirmation: true`, `cost_status: "cost_unconfirmed"` and no
+dollar amount (availability is still included when the product was found),
+the ticket is still recorded, and `dispatch-sms` refuses to text a price for
+it. Cost values are never returned by any endpoint, stored on tickets, or
+logged. The old `$50/hr + 80%` and rev5
 `$55/hr + 95%` formulas are gone.
 
 ### Flow
 
 1. `classify` → tier. 2. `quote` → saves a ticket (`DCP-T1-…`/`DCP-T2-…`).
 3. `dispatch-sms` texts the price **stored on the ticket** (the agent can't
-supply a price); refuses Tier 3 and unpriced tickets. 4. `escalate-tier3`
+supply a price); refuses Tier 3 tickets and any ticket without a
+metafield-confirmed price. 4. `escalate-tier3`
 saves/reclassifies the ticket as Tier 3 (voiding any estimate) and posts a
 Slack alert **without** phone or email.
 

@@ -50,7 +50,8 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
   const now = (ctx.now?.() ?? new Date()).toISOString()
   const ticketId = newTicketId(tier === 'TIER_1' ? 'T1' : 'T2')
 
-  if (!part) {
+  if (!part || !part.costConfirmed) {
+    // No metafield-confirmed cost: never derive a number (the listed price is retail, not cost).
     const ticket: Ticket = {
       id: ticketId,
       createdAt: now,
@@ -60,7 +61,13 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
       source,
       deviceModel: device_model,
       summary: `${repair_type} (price needs confirmation)`,
-      events: [{ at: now, type: 'created', detail: { repairType: repair_type, priceNeedsConfirmation: true } }],
+      events: [
+        {
+          at: now,
+          type: 'created',
+          detail: { repairType: repair_type, priceNeedsConfirmation: true, costStatus: part ? 'cost_unconfirmed' : 'no_listing', ...(part ? { product: part.handle } : {}) },
+        },
+      ],
     }
     await store.create(ticket)
     return {
@@ -70,8 +77,13 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
         ticket_id: ticketId,
         quote_available: false,
         price_needs_confirmation: true,
+        cost_confirmed: false,
+        cost_status: 'cost_unconfirmed',
         tier: TIERS[tier].label,
-        message: `We don't have a confirmed part price for the ${device_model} right now. Do not guess a number. Tell the customer the price needs confirmation and that a technician will follow up, or they can call ${BUSINESS_PHONE_DISPLAY}.`,
+        device_model,
+        repair_type,
+        ...(part ? { part_found: true, part_available: part.availableForSale } : { part_found: false }),
+        message: `We don't have a confirmed price for the ${device_model} ${repair_type.replace(/_/g, ' ')} right now. Do not give or guess any dollar amount. Tell the customer a technician will confirm the price and follow up, or they can call ${BUSINESS_PHONE_DISPLAY}.`,
       },
     }
   }
@@ -86,7 +98,7 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
     source,
     deviceModel: device_model,
     summary: repair_type,
-    quote: { total: quote.total, repairPrice: quote.repairPrice, tripFee: quote.tripFee, costSource: part.costSource, costConfirmed: part.costConfirmed },
+    quote: { total: quote.total, repairPrice: quote.repairPrice, tripFee: quote.tripFee, costSource: part.costSource, costConfirmed: true },
     events: [{ at: now, type: 'quote', detail: { repairType: repair_type, total: quote.total, product: part.handle } }],
   }
   await store.create(ticket)
@@ -107,13 +119,11 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
       lines: quote.lines,
       tax_included: false,
       part_available: part.availableForSale,
-      cost_confirmed: part.costConfirmed,
-      ...(part.costConfirmed ? {} : { cost_status: 'cost_unconfirmed' }),
+      cost_confirmed: true,
       message:
         `Estimate for ${device_model}: $${quote.repairPrice} for the repair` +
         (quote.tripFee ? ` plus a $${quote.tripFee} mobile trip fee, $${quote.total} total` : '') +
-        ', before sales tax. Final price is confirmed by the technician after inspection.' +
-        (part.costConfirmed ? '' : ' This estimate is based on our listed part price and is not yet confirmed; say it is an estimate that a technician will confirm.'),
+        ', before sales tax. Final price is confirmed by the technician after inspection.',
     },
   }
 }

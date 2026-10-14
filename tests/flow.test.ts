@@ -8,7 +8,7 @@ import { telemetryTool } from '@/lib/tools/telemetry'
 import { smartTriageTool } from '@/lib/tools/smart-triage'
 import { createMemoryStore } from '@/lib/store/memory'
 import { resetAdminTokenCacheForTests } from '@/lib/shopify-admin'
-import { BASE_ENV, mockFetch, product, shopifyResponse } from './helpers'
+import { BASE_ENV, costed, mockFetch, shopifyResponse } from './helpers'
 
 let store: ReturnType<typeof createMemoryStore>
 
@@ -20,16 +20,16 @@ beforeEach(() => {
 
 describe('quote', () => {
   it('prices Tier 2 from the Shopify part price with V4 and saves a ticket', async () => {
-    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([product('iPhone 13 Screen Replacement', '35.00')]) })
+    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([costed('iPhone 13 Screen Replacement', '35.00')]) })
     const r = await quoteTool({ device_model: 'iPhone 13', repair_type: 'screen_aftermarket', mobile_service: true }, { env: BASE_ENV, fetchImpl, store })
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ quote_available: true, tier: 'Tier 2', repair_price: 138, mobile_trip_fee: 25, total: 163, tax_included: false })
     const t = await store.get(r.body.ticket_id as string)
-    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_2', quote: { total: 163, costSource: 'listed_price', costConfirmed: false } })
+    expect(t).toMatchObject({ status: 'quoted', tier: 'TIER_2', quote: { total: 163, costSource: 'admin_metafield', costConfirmed: true } })
   })
 
   it('only sends a read query to Shopify (no mutations)', async () => {
-    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([product('Pixel 8 Screen', '60')]) })
+    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([costed('Pixel 8 Screen', '60')]) })
     await quoteTool({ device_model: 'Pixel 8', repair_type: 'screen_oem' }, { env: BASE_ENV, fetchImpl, store })
     const [url, init] = fetchImpl.mock.calls.find((c) => String(c[0]).includes('/admin/api/')) as unknown as [string, RequestInit]
     expect(url).toBe('https://dcp-test.myshopify.com/admin/api/2026-01/graphql.json')
@@ -77,7 +77,7 @@ describe('quote', () => {
 
 describe('dispatch SMS (mocked Twilio)', () => {
   async function quoted(mobile = false) {
-    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([product('iPhone 13 Screen', '35')]) })
+    const fetchImpl = mockFetch({ shopify: () => shopifyResponse([costed('iPhone 13 Screen', '35')]) })
     const r = await quoteTool({ device_model: 'iPhone 13', repair_type: 'screen_aftermarket', mobile_service: mobile }, { env: BASE_ENV, fetchImpl, store })
     return r.body.ticket_id as string
   }
@@ -189,7 +189,7 @@ describe('Tier 3 escalation (mocked Slack)', () => {
   })
 
   it('reclassifies an existing quoted ticket to Tier 3 and voids its estimate', async () => {
-    const q = await quoteTool({ device_model: 'iPhone 13', repair_type: 'battery' }, { env: BASE_ENV, fetchImpl: mockFetch({ shopify: () => shopifyResponse([product('iPhone 13 Battery', '18')]) }), store })
+    const q = await quoteTool({ device_model: 'iPhone 13', repair_type: 'battery' }, { env: BASE_ENV, fetchImpl: mockFetch({ shopify: () => shopifyResponse([costed('iPhone 13 Battery', '18')]) }), store })
     const r = await escalateTool({ ...input, ticket_id: q.body.ticket_id }, { env: BASE_ENV, fetchImpl: mockFetch({}), store })
     expect(r.body.ticket_id).toBe(q.body.ticket_id)
     const t = await store.get(String(q.body.ticket_id))
@@ -220,7 +220,7 @@ describe('other tools', () => {
   })
 
   it('inventory reports availability without inventing quantities', async () => {
-    const r = await inventoryTool({ device_model: 'iPhone 13', part: 'battery' }, { env: BASE_ENV, fetchImpl: mockFetch({ shopify: () => shopifyResponse([product('iPhone 13 Battery', '18')]) }) })
+    const r = await inventoryTool({ device_model: 'iPhone 13', part: 'battery' }, { env: BASE_ENV, fetchImpl: mockFetch({ shopify: () => shopifyResponse([costed('iPhone 13 Battery', '18')]) }) })
     expect(r.body).toMatchObject({ inventory_known: true, any_available: true })
     expect(JSON.stringify(r.body)).not.toMatch(/quantity|bin/i)
     const off = await inventoryTool({ device_model: 'iPhone 13', part: 'battery' }, { env: { ...BASE_ENV, SHOPIFY_CLIENT_SECRET: '' } })
