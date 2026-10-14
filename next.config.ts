@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next'
+import { API_CSP } from './lib/csp'
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
@@ -12,7 +13,13 @@ const nextConfig: NextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
         ],
       },
-      { source: '/api/:path*', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store' },
+          { key: 'Content-Security-Policy', value: API_CSP },
+        ],
+      },
     ]
   },
 }
