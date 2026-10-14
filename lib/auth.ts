@@ -39,9 +39,17 @@ export function checkAgentRequest(
 }
 
 /** Best-effort client IP (Vercel sets x-real-ip / x-forwarded-for). */
+/**
+ * Client IP for rate limiting. Prefer x-vercel-forwarded-for: Vercel sets it to
+ * the connecting client and it cannot be spoofed by the request. x-real-ip and
+ * x-forwarded-for are fallible (and on Deployment Protection / share links can
+ * flip between hops), which previously split one client across many limiter keys.
+ */
 export function getClientIp(headers: Headers): string {
-  const realIp = headers.get('x-real-ip')
-  if (realIp?.trim()) return realIp.trim()
+  const vercel = headers.get('x-vercel-forwarded-for')?.split(',')[0]?.trim()
+  if (vercel) return vercel
+  const realIp = headers.get('x-real-ip')?.trim()
+  if (realIp) return realIp
   const first = (headers.get('x-forwarded-for') || '').split(',')[0].trim()
   return first || 'unknown'
 }

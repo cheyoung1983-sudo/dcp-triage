@@ -1,8 +1,11 @@
 /**
  * Shared fixed-window rate limiter backed by Upstash Redis REST.
- * Uses a fixed window (INCR + EXPIRE) so counters are shared across Vercel
- * instances. Falls back to the per-instance in-memory limiter when no
- * KV/Upstash env is configured, and logs that fallback once.
+ * Counters are shared across Vercel instances via INCR + EXPIRE NX.
+ *
+ * - No KV/Upstash env → per-instance memory limiter (logged once), for local/test.
+ * - Redis error while KV is configured:
+ *     failOpen: true  (smart-triage) → allow + warn every time
+ *     failOpen: false (dispatch-sms) → deny 429 + error every time
  */
 import { getUpstashConfig, type UpstashConfig } from './store/upstash'
 import { createWindowLimiter, type WindowLimiter } from './rate-limit'
@@ -11,8 +14,7 @@ export interface LimitDecision {
   allowed: boolean
   remaining: number
   retryAfterSeconds: number
-  /** 'redis' when enforced in the shared store, 'memory' when using the fallback. */
-  source: 'redis' | 'memory'
+  source: 'redis' | 'memory' | 'open' | 'closed'
 }
 
 export interface SharedLimiter {
@@ -24,20 +26,15 @@ interface Options {
   name: string
   limit: number
   windowSeconds: number
+  /** When Redis errors with KV configured: allow (true) or deny (false). */
+  failOpen: boolean
   env?: Record<string, string | undefined>
   fetchImpl?: typeof fetch
   now?: () => number
 }
 
-let fallbackLogged = false
+let missingEnvLogged = new Set<string>()
 
-function logFallback(name: string, reason: string) {
-  if (fallbackLogged) return
-  fallbackLogged = true
-  console.error(`[dcp-triage] rate limiter "${name}" is per-instance only (${reason}); shared limits are not enforced`)
-}
-
-/** Fixed-window counter in Redis: INCR the bucket key, set expiry on first hit. */
 async function redisConsume(
   config: UpstashConfig,
   fetchImpl: typeof fetch,
@@ -57,8 +54,11 @@ async function redisConsume(
   })
   if (!res.ok) throw new Error(`rate limit store responded ${res.status}`)
   const out = (await res.json()) as { result?: unknown; error?: string }[]
-  if (out.some((r) => r.error)) throw new Error('rate limit store command failed')
+  if (!Array.isArray(out)) throw new Error('rate limit store returned non-array')
+  const failed = out.find((r) => r && r.error)
+  if (failed) throw new Error(`rate limit store command failed: ${failed.error}`)
   const count = Number(out[0]?.result ?? 0)
+  if (!Number.isFinite(count) || count < 1) throw new Error(`rate limit store returned bad count: ${String(out[0]?.result)}`)
   const ttl = Number(out[2]?.result ?? -1)
   const retryAfterSeconds = ttl > 0 ? ttl : windowSeconds
   if (count > limit) {
@@ -68,7 +68,7 @@ async function redisConsume(
 }
 
 export function createSharedLimiter(options: Options): SharedLimiter & { memory: WindowLimiter } {
-  const { name, limit, windowSeconds } = options
+  const { name, limit, windowSeconds, failOpen } = options
   const memory = createWindowLimiter({
     limit,
     windowMs: windowSeconds * 1000,
@@ -81,7 +81,10 @@ export function createSharedLimiter(options: Options): SharedLimiter & { memory:
     async consume(key) {
       const config = getUpstashConfig(env())
       if (!config) {
-        logFallback(name, 'no KV_REST_API_URL/UPSTASH_REDIS_REST_URL configured')
+        if (!missingEnvLogged.has(name)) {
+          missingEnvLogged.add(name)
+          console.error(`[dcp-triage] rate limiter "${name}" is per-instance only (no KV_REST_API_URL/UPSTASH_REDIS_REST_URL configured); shared limits are not enforced`)
+        }
         const d = memory.consume(key)
         return { ...d, source: 'memory' }
       }
@@ -90,15 +93,18 @@ export function createSharedLimiter(options: Options): SharedLimiter & { memory:
       try {
         return await redisConsume(config, options.fetchImpl ?? fetch, bucketKey, limit, windowSeconds)
       } catch (err) {
-        // A shared-store outage must not silently remove the limit.
-        console.error(`[dcp-triage] shared rate limiter "${name}" failed, using per-instance fallback: ${(err as Error).message}`)
-        const d = memory.consume(key)
-        return { ...d, source: 'memory' }
+        const reason = (err as Error).message || 'redis error'
+        if (failOpen) {
+          console.warn(`[dcp-triage] rate limiter "${name}" redis error (${reason}); fail-open allowing request`)
+          return { allowed: true, remaining: 0, retryAfterSeconds: 0, source: 'open' }
+        }
+        console.error(`[dcp-triage] rate limiter "${name}" redis error (${reason}); fail-closed denying request`)
+        return { allowed: false, remaining: 0, retryAfterSeconds: 60, source: 'closed' }
       }
     },
     reset() {
       memory.reset()
-      fallbackLogged = false
+      missingEnvLogged.delete(name)
     },
   }
 }

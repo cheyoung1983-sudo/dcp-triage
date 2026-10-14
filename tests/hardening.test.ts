@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSharedLimiter } from '@/lib/shared-limit'
+import { getClientIp } from '@/lib/auth'
 import { readJson } from '@/lib/http'
 import { pageCsp, API_CSP } from '@/lib/csp'
 import { smartTriageTool } from '@/lib/tools/smart-triage'
@@ -31,8 +32,8 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
 describe('shared rate limiter', () => {
   it('shares counts across limiter instances (simulated serverless instances)', async () => {
     const redis = fakeRedis()
-    const a = createSharedLimiter({ name: 't', limit: 3, windowSeconds: 60, env: KV, fetchImpl: redis.fetchImpl })
-    const b = createSharedLimiter({ name: 't', limit: 3, windowSeconds: 60, env: KV, fetchImpl: redis.fetchImpl })
+    const a = createSharedLimiter({ name: 't', limit: 3, windowSeconds: 60, failOpen: true, env: KV, fetchImpl: redis.fetchImpl })
+    const b = createSharedLimiter({ name: 't', limit: 3, windowSeconds: 60, failOpen: true, env: KV, fetchImpl: redis.fetchImpl })
     expect((await a.consume('k')).allowed).toBe(true)
     expect((await b.consume('k')).allowed).toBe(true)
     expect((await a.consume('k')).allowed).toBe(true)
@@ -45,20 +46,56 @@ describe('shared rate limiter', () => {
 
   it('falls back to memory and logs when KV env is missing', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const l = createSharedLimiter({ name: 'nokv', limit: 1, windowSeconds: 60, env: {} })
+    const l = createSharedLimiter({ name: 'nokv', limit: 1, windowSeconds: 60, failOpen: true, env: {} })
     l.reset()
     expect(await l.consume('k')).toMatchObject({ allowed: true, source: 'memory' })
     expect((await l.consume('k')).allowed).toBe(false)
     expect(err).toHaveBeenCalled()
   })
 
-  it('falls back to memory (and logs) when Redis errors, never failing open', async () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('fails open with a warning for smart-triage when Redis errors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const broken = (async () => new Response('down', { status: 500 })) as unknown as typeof fetch
-    const l = createSharedLimiter({ name: 'down', limit: 1, windowSeconds: 60, env: KV, fetchImpl: broken })
-    expect(await l.consume('k')).toMatchObject({ allowed: true, source: 'memory' })
-    expect((await l.consume('k')).allowed).toBe(false)
-    expect(err).toHaveBeenCalledWith(expect.stringContaining('failed'))
+    const l = createSharedLimiter({ name: 'down', limit: 1, windowSeconds: 60, failOpen: true, env: KV, fetchImpl: broken })
+    expect(await l.consume('k')).toMatchObject({ allowed: true, source: 'open' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('fail-open'))
+  })
+
+  it('fails closed with an error for SMS when Redis errors or returns an error item', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const cmdErr = (async () => new Response(JSON.stringify([{ error: 'ERR syntax' }, { result: 1 }, { result: 60 }]), { status: 200 })) as unknown as typeof fetch
+    const l = createSharedLimiter({ name: 'sms', limit: 5, windowSeconds: 60, failOpen: false, env: KV, fetchImpl: cmdErr })
+    const d = await l.consume('k')
+    expect(d).toMatchObject({ allowed: false, source: 'closed' })
+    expect(d.retryAfterSeconds).toBeGreaterThan(0)
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('fail-closed'))
+  })
+
+  it('keys one client consistently even when proxy hops vary (regression)', () => {
+    const a = new Headers({ 'x-vercel-forwarded-for': '198.51.100.7', 'x-real-ip': '10.0.0.1', 'x-forwarded-for': '10.0.0.1, 198.51.100.7' })
+    const b = new Headers({ 'x-vercel-forwarded-for': '198.51.100.7', 'x-real-ip': '10.0.0.2', 'x-forwarded-for': '10.0.0.2' })
+    expect(getClientIp(a)).toBe('198.51.100.7')
+    expect(getClientIp(b)).toBe('198.51.100.7')
+  })
+
+  it('smart-triage route enforces the shared Redis limit across instances (regression)', async () => {
+    const redis = fakeRedis()
+    vi.stubEnv('KV_REST_API_URL', KV.KV_REST_API_URL)
+    vi.stubEnv('KV_REST_API_TOKEN', KV.KV_REST_API_TOKEN)
+    vi.stubGlobal('fetch', redis.fetchImpl)
+    const req = () => new Request('http://localhost/api/smart-triage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vercel-forwarded-for': '198.51.100.9' },
+      body: JSON.stringify({ symptoms: 'battery dies fast' }),
+    })
+    for (let i = 0; i < 30; i++) {
+      const r = await smartPOST(req())
+      expect(r.status).toBe(200)
+      expect(r.headers.get('X-RateLimit-Source')).toBe('redis')
+    }
+    const res = await smartPOST(req())
+    expect(res.status).toBe(429)
+    expect(Number(res.headers.get('Retry-After'))).toBeGreaterThan(0)
+    vi.unstubAllGlobals()
   })
 
   it('smart-triage route returns 429 with Retry-After after 30 requests', async () => {

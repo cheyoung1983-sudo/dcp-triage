@@ -15,9 +15,9 @@ import { firstIssue, STORE_UNAVAILABLE, type ToolContext, type ToolResult } from
 
 const HOUR = 60 * 60 * 1000
 export const SMS_LIMITS = { perPhonePerHour: 3, perIpPerHour: 10, perInstancePerDay: 100 }
-export const phoneLimiter = createSharedLimiter({ name: 'sms-phone', limit: SMS_LIMITS.perPhonePerHour, windowSeconds: HOUR / 1000 })
-export const ipLimiter = createSharedLimiter({ name: 'sms-ip', limit: SMS_LIMITS.perIpPerHour, windowSeconds: HOUR / 1000 })
-export const dailyLimiter = createSharedLimiter({ name: 'sms-daily', limit: SMS_LIMITS.perInstancePerDay, windowSeconds: (24 * HOUR) / 1000 })
+export const phoneLimiter = createSharedLimiter({ name: 'sms-phone', limit: SMS_LIMITS.perPhonePerHour, windowSeconds: HOUR / 1000, failOpen: false })
+export const ipLimiter = createSharedLimiter({ name: 'sms-ip', limit: SMS_LIMITS.perIpPerHour, windowSeconds: HOUR / 1000, failOpen: false })
+export const dailyLimiter = createSharedLimiter({ name: 'sms-daily', limit: SMS_LIMITS.perInstancePerDay, windowSeconds: (24 * HOUR) / 1000, failOpen: false })
 
 export function resetSmsLimiters() {
   phoneLimiter.reset()
