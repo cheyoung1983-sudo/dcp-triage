@@ -12,8 +12,16 @@ export const dynamic = 'force-dynamic'
 export const limiter = createSharedLimiter({ name: 'smart-triage', limit: 30, windowSeconds: 10 * 60, failOpen: true })
 
 export async function POST(req: Request) {
+  const via = req.headers.get('x-vercel-forwarded-for')?.trim()
+    ? 'vercel'
+    : req.headers.get('x-real-ip')?.trim()
+      ? 'real'
+      : req.headers.get('x-forwarded-for')?.trim()
+        ? 'xff'
+        : 'unknown'
   const ip = getClientIp(req.headers)
-  const key = hashKey(rateLimitIpKey(ip))
+  const keyed = rateLimitIpKey(ip)
+  const key = hashKey(keyed)
   const check = await limiter.consume(key)
   const rlHeaders: Record<string, string> = {
     'X-RateLimit-Limit': '30',
@@ -21,6 +29,9 @@ export async function POST(req: Request) {
     'X-RateLimit-Source': check.source,
     // Short, non-reversible key prefix so stable per-client keying can be verified.
     'X-RateLimit-Key': key.slice(0, 8),
+    'X-RateLimit-Ip-Via': via,
+    'X-RateLimit-Ip-Family': ip.includes(':') ? 'v6' : 'v4',
+    'X-RateLimit-Ip-Len': String(ip.length),
   }
   if (!check.allowed) {
     return NextResponse.json(
