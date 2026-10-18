@@ -1,0 +1,7 @@
+{
+  "name": "dcp-triage",
+  "description": "Display & Cell Pros triage app - Describe what is wrong with your phone and get a repair tier and next steps.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

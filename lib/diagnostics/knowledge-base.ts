@@ -17,32 +17,6 @@ export function tokenize(text: string): string[] {
   return (text.toLowerCase().match(/[a-z0-9]+/g) || []).filter((t) => t.length > 2 && !STOPWORDS.has(t))
 }
 
-/** Model tokens keep short numbers ("13", "s24") that tokenize() drops. */
-export function modelTokens(text: string): string[] {
-  return (text.toLowerCase().match(/[a-z0-9]+/g) || []).filter((t) => !STOPWORDS.has(t))
-}
-
-/**
- * Scores how well the customer's model text matches a catalog model. When the
- * customer names a model number (e.g. "iphone 13"), only catalog models with that
- * number get the strong boost; the same family with a different number gets a
- * small one, so "iPhone 13" no longer ranks iPhone 15 Pro first.
- */
-export function modelScore(query: string, modelName: string): number {
-  const q = new Set(modelTokens(query))
-  if (!q.size) return 0
-  const m = modelTokens(modelName)
-  const qNums = [...q].filter((t) => /\d/.test(t))
-  const mNums = m.filter((t) => /\d/.test(t))
-  const words = m.filter((t) => !/\d/.test(t) && t.length > 2)
-  const familyHit = words.some((t) => q.has(t))
-  if (qNums.length && mNums.length) {
-    if (mNums.some((t) => q.has(t))) return familyHit || !words.length ? 8 : 5
-    return familyHit ? 1 : 0
-  }
-  return familyHit ? 5 : 0
-}
-
 export interface DeviceMatch {
   device: SupportedDeviceModel
   matchedSymptoms: string[]
@@ -52,11 +26,12 @@ export interface DeviceMatch {
 
 export function findMatchingDevices(deviceModel: string, symptomDescription: string, limit = 3): DeviceMatch[] {
   const queryTokens = tokenize(symptomDescription)
+  const modelTokens = new Set(tokenize(deviceModel))
   const matches: DeviceMatch[] = []
   for (const device of SUPPORTED_DEVICES_DATABASE) {
     let score = 0
     const matchedSymptoms: string[] = []
-    score += modelScore(deviceModel, device.modelName)
+    if (modelTokens.size > 0 && tokenize(device.modelName).some((t) => modelTokens.has(t))) score += 5
     for (const symptom of device.commonSymptoms) {
       const overlap = tokenize(symptom).filter((t) => queryTokens.includes(t)).length
       if (overlap > 0) {

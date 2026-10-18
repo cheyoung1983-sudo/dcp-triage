@@ -5,10 +5,8 @@
  */
 import { z } from 'zod'
 import { BUSINESS_PHONE_DISPLAY, SERVICES_FAQ_URL } from '../config'
-import { rateLimitIpKey } from '../auth'
 import { normalizeUsPhone } from '../phone'
-import { hashKey } from '../rate-limit'
-import { createSharedLimiter } from '../shared-limit'
+import { createWindowLimiter, hashKey } from '../rate-limit'
 import { getTicketStore } from '../store'
 import { TIERS } from '../tiers'
 import { getTwilioConfig, sendTwilioSms } from '../twilio'
@@ -16,9 +14,9 @@ import { firstIssue, STORE_UNAVAILABLE, type ToolContext, type ToolResult } from
 
 const HOUR = 60 * 60 * 1000
 export const SMS_LIMITS = { perPhonePerHour: 3, perIpPerHour: 10, perInstancePerDay: 100 }
-export const phoneLimiter = createSharedLimiter({ name: 'sms-phone', limit: SMS_LIMITS.perPhonePerHour, windowSeconds: HOUR / 1000, failOpen: false })
-export const ipLimiter = createSharedLimiter({ name: 'sms-ip', limit: SMS_LIMITS.perIpPerHour, windowSeconds: HOUR / 1000, failOpen: false })
-export const dailyLimiter = createSharedLimiter({ name: 'sms-daily', limit: SMS_LIMITS.perInstancePerDay, windowSeconds: (24 * HOUR) / 1000, failOpen: false })
+export const phoneLimiter = createWindowLimiter({ limit: SMS_LIMITS.perPhonePerHour, windowMs: HOUR })
+export const ipLimiter = createWindowLimiter({ limit: SMS_LIMITS.perIpPerHour, windowMs: HOUR })
+export const dailyLimiter = createWindowLimiter({ limit: SMS_LIMITS.perInstancePerDay, windowMs: 24 * HOUR })
 
 export function resetSmsLimiters() {
   phoneLimiter.reset()
@@ -46,7 +44,7 @@ export function buildSmsBody(params: { tierLabel: string; total: number; tripFee
 
 export async function dispatchTool(input: unknown, ctx: ToolContext = {}): Promise<ToolResult> {
   const env = ctx.env ?? process.env
-  const ipCheck = await ipLimiter.consume(hashKey(`ip:${rateLimitIpKey(ctx.clientIp ?? 'unknown')}`))
+  const ipCheck = ipLimiter.consume(hashKey(`ip:${ctx.clientIp ?? 'unknown'}`))
   if (!ipCheck.allowed) {
     return {
       status: 429,
@@ -81,7 +79,7 @@ export async function dispatchTool(input: unknown, ctx: ToolContext = {}): Promi
     return { status: 503, body: { success: false, smsSent: false, error: 'SMS is not configured. Do not tell the customer a text was sent.' } }
   }
 
-  const phoneCheck = await phoneLimiter.consume(hashKey(`phone:${phone}`))
+  const phoneCheck = phoneLimiter.consume(hashKey(`phone:${phone}`))
   if (!phoneCheck.allowed) {
     return {
       status: 429,
@@ -89,7 +87,7 @@ export async function dispatchTool(input: unknown, ctx: ToolContext = {}): Promi
       headers: { 'Retry-After': String(phoneCheck.retryAfterSeconds) },
     }
   }
-  const dailyCheck = await dailyLimiter.consume('daily')
+  const dailyCheck = dailyLimiter.consume('daily')
   if (!dailyCheck.allowed) {
     return {
       status: 429,
