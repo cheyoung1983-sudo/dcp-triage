@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import type { ReactNode } from 'react'
+import { Analytics } from '@vercel/analytics/next'
 import { connection } from 'next/server'
 import './globals.css'
 
@@ -13,7 +14,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   await connection()
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics />
+      </body>
     </html>
   )
 }
