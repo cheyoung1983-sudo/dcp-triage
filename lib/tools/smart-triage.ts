@@ -25,7 +25,9 @@ export function smartTriageTool(input: unknown): ToolResult {
   if (!parsed.success) return { status: 400, body: { success: false, error: firstIssue(parsed.error, 'Invalid request') } }
   const { device_model, symptoms } = parsed.data
   const c = classifySymptoms(symptoms)
-  const related = findMatchingDevices(device_model, symptoms, 2)
+  // When the customer names a model in the text and no model was selected, prefer that model.
+  const model = device_model || symptoms
+  const related = findMatchingDevices(model, symptoms, 2)
     .filter((m) => m.matchedSymptoms.length > 0)
     .map((m) => ({ device: `${m.device.manufacturer} ${m.device.modelName}`, knownIssues: m.matchedSymptoms.slice(0, 3) }))
 

@@ -39,9 +39,30 @@ export function checkAgentRequest(
 }
 
 /** Best-effort client IP (Vercel sets x-real-ip / x-forwarded-for). */
+/**
+ * Client IP for rate limiting. Prefer x-vercel-forwarded-for: Vercel sets it to
+ * the connecting client and it cannot be spoofed by the request. x-real-ip and
+ * x-forwarded-for are fallible (and on Deployment Protection / share links can
+ * flip between hops), which previously split one client across many limiter keys.
+ */
+/**
+ * Rate-limit key for an IP. IPv6 clients commonly rotate addresses inside their
+ * /64 (privacy addresses), so IPv6 is keyed by its /64 prefix; IPv4 as-is.
+ */
+export function rateLimitIpKey(ip: string): string {
+  if (!ip.includes(':')) return ip
+  const [head, tail] = ip.toLowerCase().split('::')
+  const left = head ? head.split(':') : []
+  const right = tail !== undefined && tail ? tail.split(':') : []
+  const groups = tail !== undefined ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right] : left
+  return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '') || '0').join(':') + '::/64'
+}
+
 export function getClientIp(headers: Headers): string {
-  const realIp = headers.get('x-real-ip')
-  if (realIp?.trim()) return realIp.trim()
+  const vercel = headers.get('x-vercel-forwarded-for')?.split(',')[0]?.trim()
+  if (vercel) return vercel
+  const realIp = headers.get('x-real-ip')?.trim()
+  if (realIp) return realIp
   const first = (headers.get('x-forwarded-for') || '').split(',')[0].trim()
   return first || 'unknown'
 }
