@@ -78,7 +78,8 @@ export async function quoteTool(input: unknown, ctx: ToolContext = {}): Promise<
         quote_available: false,
         price_needs_confirmation: true,
         cost_confirmed: false,
-        cost_status: 'cost_unconfirmed',
+        // Matches the ticket event: no Shopify listing at all vs. listing without a confirmed cost.
+        cost_status: part ? 'cost_unconfirmed' : 'no_listing',
         tier: TIERS[tier].label,
         device_model,
         repair_type,

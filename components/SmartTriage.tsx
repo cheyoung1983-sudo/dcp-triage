@@ -9,6 +9,7 @@
 import { useState, type FormEvent } from 'react'
 import { BUSINESS_PHONE_DISPLAY } from '@/lib/config'
 import { classifySymptoms } from '@/lib/tiers'
+import { smartTriageErrorMessage } from '@/lib/triage-errors'
 
 interface Result {
   tier: string
@@ -64,6 +65,8 @@ export default function SmartTriage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError('')
+    // Clear the previous answer so an error is never shown next to a stale result.
+    setResult(null)
     if (symptoms.trim().length < 3) {
       setError('Tell us what is happening with the phone.')
       return
@@ -76,15 +79,19 @@ export default function SmartTriage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_model: deviceModel, symptoms }),
       })
-      const json = await res.json()
-      if (!res.ok || !json.success) throw new Error(json.error || 'Something went wrong')
+      // A non-JSON reply (e.g. a platform error page) must not surface a raw parser error.
+      const json = (await res.json().catch(() => null)) as (Result & { success?: boolean; error?: string }) | null
+      if (!res.ok || !json?.success) {
+        setError(smartTriageErrorMessage(res.status, json?.error))
+        return
+      }
       setResult(json)
       writeCache(key, json)
-    } catch (err) {
+    } catch {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         setResult(readCache()[key] ?? offlineResult(symptoms))
       } else {
-        setError(err instanceof Error ? err.message : 'Something went wrong')
+        setError(smartTriageErrorMessage(0))
       }
     } finally {
       setLoading(false)
