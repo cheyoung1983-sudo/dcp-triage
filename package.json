@@ -4,7 +4,7 @@
   "private": true,
   "description": "Display & Cell Pros triage app (triage.displaycellpros.com)",
   "engines": {
-    "node": ">=22"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "next dev -p 3000 -H 0.0.0.0",
@@ -16,6 +16,7 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@vercel/analytics": "^1.4.1",
     "next": "^16.4.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
 import type { ReactNode } from 'react'
+import { Analytics } from '@vercel/analytics/next'
+import { connection } from 'next/server'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -11,10 +13,15 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Render per request so Next.js can apply the CSP nonce from proxy.ts to its scripts.
+  await connection()
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics />
+      </body>
     </html>
   )
 }
