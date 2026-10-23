@@ -115,10 +115,10 @@ escalation return 503. Tickets never live in memory outside local dev/tests.
 through `proxy.ts`). The public triage flow stays public, and the agent/tool APIs still use `X-DCP-Agent-Secret`.
 
 - Env: `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET` (required), `APP_BASE_URL`
-  (production `https://triage.displaycellpros.com`; unset on previews), `DCP_STAFF_EMAILS` (verified emails allowed in).
+  (production `https://triage.displaycellpros.com`), `DCP_STAFF_EMAILS` (verified emails allowed in).
 - Fails closed: without the env, `/admin` and `/auth/*` return `503 Login is not configured`. No fake users.
 - Auth0 app settings: callback `https://triage.displaycellpros.com/auth/callback`; logout URL and web origin
-  `https://triage.displaycellpros.com`; add `http://localhost:3000` equivalents for dev and exact preview URLs if needed.
+  `https://triage.displaycellpros.com`; `http://localhost:3000` for dev. Preview URLs are deliberately not allowed in Auth0.
 - SDK routes: `/auth/login`, `/auth/logout`, `/auth/callback`, `/auth/profile`.
 - Every displaycellpros.com subdomain must be listed in Auth0. See [docs/AUTH0-SUBDOMAINS.md](docs/AUTH0-SUBDOMAINS.md).
 
