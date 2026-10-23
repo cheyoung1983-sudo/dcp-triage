@@ -3,7 +3,7 @@ import { getClientIp, rateLimitIpKey } from '@/lib/auth'
 import { methodNotAllowed, readJson, toResponse } from '@/lib/http'
 import { hashKey } from '@/lib/rate-limit'
 import { createSharedLimiter } from '@/lib/shared-limit'
-import { smartTriageTool } from '@/lib/tools/smart-triage'
+import { recordWebIntake, smartTriageTool } from '@/lib/tools/smart-triage'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,7 +30,9 @@ export async function POST(req: Request) {
   }
   const body = await readJson(req)
   if (!body.ok) return body.response
-  const result = toResponse(smartTriageTool(body.data))
+  const triage = smartTriageTool(body.data)
+  if (triage.status === 200) Object.assign(triage.body, await recordWebIntake(body.data))
+  const result = toResponse(triage)
   for (const [k, v] of Object.entries(rlHeaders)) result.headers.set(k, v)
   return result
 }
