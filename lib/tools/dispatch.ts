@@ -40,7 +40,7 @@ export function buildSmsBody(params: { tierLabel: string; total: number; tripFee
   return (
     `Display & Cell Pros: Your ${params.tierLabel} repair estimate is ${price}, before tax. Ref ${params.ticketId}. ` +
     `Details and next steps: ${SERVICES_FAQ_URL} ` +
-    `Questions? Call ${BUSINESS_PHONE_DISPLAY}. Reply STOP to opt out.`
+    `Questions? Call ${BUSINESS_PHONE_DISPLAY}. Reply STOP to opt out, HELP for help.`
   )
 }
 
@@ -69,6 +69,9 @@ export async function dispatchTool(input: unknown, ctx: ToolContext = {}): Promi
 
   const ticket = await store.get(parsed.data.ticket_id)
   if (!ticket) return { status: 404, body: { success: false, smsSent: false, error: 'Unknown ticket_id. Call get_repair_quote first.' } }
+  if (ticket.smsConsent && ticket.smsConsent.granted !== true) {
+    return { status: 403, body: { success: false, smsSent: false, error: 'The customer did not opt in to texts. Do not text them; offer to call instead.' } }
+  }
   if (ticket.tier === 'TIER_3') {
     return { status: 409, body: { success: false, smsSent: false, error: 'Tier 3 tickets never get a price by text. Use escalate_tier3_ticket.' } }
   }

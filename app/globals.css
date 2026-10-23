@@ -10,3 +10,6 @@ button.secondary { background: #e7e7ea; color: #111; margin-right: 0.5rem; }
 button:disabled { opacity: 0.5; cursor: default; }
 .muted { color: #555; font-size: 0.9rem; }
 .tier { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; background: #eef; font-weight: 600; }
+.site-footer { max-width: 720px; margin: 0 auto; padding: 1rem 1rem 2rem; color: #555; font-size: 0.9rem; text-align: center; }
+.consent { display: flex; gap: 0.5rem; align-items: flex-start; font-weight: 400; font-size: 0.9rem; }
+.consent input { width: auto; margin-top: 0.2rem; }

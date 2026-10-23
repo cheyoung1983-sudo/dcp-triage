@@ -7,7 +7,7 @@
  * recent results in localStorage.
  */
 import { useState, type FormEvent } from 'react'
-import { BUSINESS_PHONE_DISPLAY } from '@/lib/config'
+import { BUSINESS_PHONE_DISPLAY, PRIVACY_POLICY_URL, SMS_CONSENT_TEXT, SMS_TERMS_URL } from '@/lib/config'
 import { classifySymptoms } from '@/lib/tiers'
 import { smartTriageErrorMessage } from '@/lib/triage-errors'
 
@@ -58,6 +58,9 @@ function offlineResult(symptoms: string): Result {
 export default function SmartTriage() {
   const [deviceModel, setDeviceModel] = useState('')
   const [symptoms, setSymptoms] = useState('')
+  const [phone, setPhone] = useState('')
+  const [smsConsent, setSmsConsent] = useState(false)
+  const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<Result | null>(null)
@@ -65,6 +68,7 @@ export default function SmartTriage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError('')
+    setNotice('')
     // Clear the previous answer so an error is never shown next to a stale result.
     setResult(null)
     if (symptoms.trim().length < 3) {
@@ -77,15 +81,17 @@ export default function SmartTriage() {
       const res = await fetch('/api/smart-triage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_model: deviceModel, symptoms }),
+        body: JSON.stringify({ device_model: deviceModel, symptoms, customer_phone: phone, sms_consent: smsConsent }),
       })
       // A non-JSON reply (e.g. a platform error page) must not surface a raw parser error.
-      const json = (await res.json().catch(() => null)) as (Result & { success?: boolean; error?: string }) | null
+      const json = (await res.json().catch(() => null)) as (Result & { success?: boolean; error?: string; ticket_id?: string; phone_error?: string }) | null
       if (!res.ok || !json?.success) {
         setError(smartTriageErrorMessage(res.status, json?.error))
         return
       }
       setResult(json)
+      if (json.phone_error) setNotice(json.phone_error)
+      else if (json.ticket_id) setNotice(`Saved. Your reference is ${json.ticket_id}.`)
       writeCache(key, json)
     } catch {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -105,9 +111,19 @@ export default function SmartTriage() {
         <input id="device" value={deviceModel} onChange={(e) => setDeviceModel(e.target.value)} placeholder="e.g. iPhone 13" maxLength={120} />
         <label htmlFor="symptoms">What is happening?</label>
         <textarea id="symptoms" rows={4} value={symptoms} onChange={(e) => setSymptoms(e.target.value)} placeholder="e.g. Screen is cracked and touch stopped working" maxLength={1000} />
+        <label htmlFor="phone">Mobile number (optional)</label>
+        <input id="phone" type="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. (509) 555-0123" maxLength={32} />
+        <label className="consent" htmlFor="sms-consent">
+          <input id="sms-consent" name="sms_consent" type="checkbox" checked={smsConsent} onChange={(e) => setSmsConsent(e.target.checked)} />
+          <span>
+            {SMS_CONSENT_TEXT} <a href={SMS_TERMS_URL}>SMS Terms</a> · <a href={PRIVACY_POLICY_URL}>Privacy Policy</a>
+          </span>
+        </label>
+        <p className="muted">Texting is optional and not required to get a diagnosis.</p>
         <button type="submit" disabled={loading}>{loading ? 'Checking…' : 'Get a diagnosis'}</button>
       </form>
       {error && <p role="alert">{error}</p>}
+      {notice && <p className="muted" aria-live="polite">{notice}</p>}
       {result && (
         <section aria-live="polite">
           <h2>

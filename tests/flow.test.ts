@@ -154,7 +154,7 @@ describe('dispatch SMS (mocked Twilio)', () => {
 
   it('sanitizes nothing user-controlled into the SMS beyond the ticket ref', () => {
     expect(buildSmsBody({ tierLabel: 'Tier 1', total: 108, tripFee: 0, ticketId: 'DCP-T1-X' })).toBe(
-      'Display & Cell Pros: Your Tier 1 repair estimate is $108, before tax. Ref DCP-T1-X. Details and next steps: https://www.displaycellpros.com/services-faq Questions? Call (509) 255-3852. Reply STOP to opt out.'
+      'Display & Cell Pros: Your Tier 1 repair estimate is $108, before tax. Ref DCP-T1-X. Details and next steps: https://www.displaycellpros.com/services-faq Questions? Call (509) 255-3852. Reply STOP to opt out, HELP for help.'
     )
   })
 })
