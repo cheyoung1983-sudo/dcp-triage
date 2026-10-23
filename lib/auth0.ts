@@ -16,6 +16,7 @@
  *                      so the SDK infers the preview host.
  *   DCP_STAFF_EMAILS   required; comma-separated verified emails allowed into /admin.
  */
+import { NextResponse } from 'next/server'
 import { Auth0Client } from '@auth0/nextjs-auth0/server'
 
 type Env = Record<string, string | undefined>
@@ -50,6 +51,11 @@ export function auth0Host(env: Env = process.env): string | null {
   return /^[a-z0-9.-]+$/i.test(d) ? d : null
 }
 
+function appBaseUrl(env: Env = process.env): string | string[] | undefined {
+  const list = val(env, 'APP_BASE_URL').split(',').map((u) => u.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '')).filter(Boolean)
+  return list.length === 0 ? undefined : list.length === 1 ? list[0] : list
+}
+
 let client: Auth0Client | null | undefined
 
 /** The Auth0 client, or null when not configured. Never constructed with placeholders. */
@@ -60,7 +66,25 @@ export function getAuth0(): Auth0Client | null {
   if (!host) return (client = null)
   client = new Auth0Client({
     domain: host,
-    // appBaseUrl: read from APP_BASE_URL by the SDK, or inferred from the request host when unset (previews).
+    // Pass trimmed values explicitly. The SDK reads process.env verbatim, so a
+    // trailing newline/space/quote in a pasted Vercel value (common with
+    // `echo ... | vercel env add`) silently breaks the token exchange
+    // ("An error occurred while trying to exchange the authorization code").
+    clientId: val(process.env, 'AUTH0_CLIENT_ID'),
+    clientSecret: val(process.env, 'AUTH0_CLIENT_SECRET'),
+    secret: val(process.env, 'AUTH0_SECRET'),
+    // appBaseUrl: from APP_BASE_URL (trimmed, may be comma list), or inferred from the request host when unset (previews).
+    ...(appBaseUrl() ? { appBaseUrl: appBaseUrl() } : {}),
+    onCallback: async (error, ctx) => {
+      if (error) {
+        // Log the code and Auth0's reason (e.g. invalid_client, invalid_grant), never secrets.
+        const cause = (error as { cause?: { code?: string; message?: string } }).cause
+        console.error('[auth0] callback failed', JSON.stringify({ code: error.code, message: error.message, cause: cause ? { code: cause.code, message: cause.message } : undefined }))
+        return new NextResponse('Sign-in failed. Please go back to /admin and try again.', { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+      }
+      const base = ctx.appBaseUrl || 'https://triage.displaycellpros.com'
+      return NextResponse.redirect(new URL(ctx.returnTo || '/admin', base))
+    },
     signInReturnToPath: '/admin',
     session: { rolling: true, absoluteDuration: 60 * 60 * 12, inactivityDuration: 60 * 60 * 2 },
   })
