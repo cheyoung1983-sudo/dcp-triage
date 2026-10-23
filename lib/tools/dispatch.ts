@@ -40,7 +40,7 @@ export function buildSmsBody(params: { tierLabel: string; total: number; tripFee
   return (
     `Display & Cell Pros: Your ${params.tierLabel} repair estimate is ${price}, before tax. Ref ${params.ticketId}. ` +
     `Details and next steps: ${SERVICES_FAQ_URL} ` +
-    `Questions? Call ${BUSINESS_PHONE_DISPLAY}. Reply STOP to opt out.`
+    `Questions? Call ${BUSINESS_PHONE_DISPLAY}. Reply STOP to opt out, HELP for help.`
   )
 }
 
